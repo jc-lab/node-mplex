@@ -1,4 +1,4 @@
-import type { Uint8ArrayList } from 'uint8arraylist'
+import type { Uint8ArrayList } from './thirdparty/uint8arraylist'
 
 type INITIATOR_NAME = 'NEW_STREAM' | 'MESSAGE' | 'CLOSE' | 'RESET'
 type RECEIVER_NAME = 'MESSAGE' | 'CLOSE' | 'RESET'

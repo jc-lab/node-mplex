@@ -1,50 +1,21 @@
-# @libp2p/mplex <!-- omit in toc -->
+# node-mplex <!-- omit in toc -->
 
-[![libp2p.io](https://img.shields.io/badge/project-libp2p-yellow.svg?style=flat-square)](http://libp2p.io/)
-[![IRC](https://img.shields.io/badge/freenode-%23libp2p-yellow.svg?style=flat-square)](http://webchat.freenode.net/?channels=%23libp2p)
-[![Discuss](https://img.shields.io/discourse/https/discuss.libp2p.io/posts.svg?style=flat-square)](https://discuss.libp2p.io)
-[![codecov](https://img.shields.io/codecov/c/github/libp2p/js-libp2p-mplex.svg?style=flat-square)](https://codecov.io/gh/libp2p/js-libp2p-mplex)
-[![CI](https://img.shields.io/github/workflow/status/libp2p/js-libp2p-interfaces/test%20&%20maybe%20release/master?style=flat-square)](https://github.com/libp2p/js-libp2p-mplex/actions/workflows/js-test-and-release.yml)
-
-> JavaScript implementation of <https://github.com/libp2p/mplex>
-
-## Table of contents <!-- omit in toc -->
-
-- [Install](#install)
-- [Usage](#usage)
-- [API](#api)
-  - [`const factory = new Mplex([options])`](#const-factory--new-mplexoptions)
-  - [`const muxer = factory.createStreamMuxer(components, [options])`](#const-muxer--factorycreatestreammuxercomponents-options)
-  - [`muxer.onStream`](#muxeronstream)
-  - [`muxer.onStreamEnd`](#muxeronstreamend)
-  - [`muxer.streams`](#muxerstreams)
-  - [`const stream = muxer.newStream([options])`](#const-stream--muxernewstreamoptions)
-    - [`stream.close()`](#streamclose)
-    - [`stream.abort([err])`](#streamaborterr)
-    - [`stream.reset()`](#streamreset)
-    - [`stream.timeline`](#streamtimeline)
-    - [`stream.id`](#streamid)
-- [Contribute](#contribute)
-- [License](#license)
-- [Contribution](#contribution)
+> stream implementation of <https://github.com/libp2p/js-libp2p-mplex>
 
 ## Install
 
 ```console
-$ npm i @libp2p/mplex
+$ yarn add node-mplex
 ```
-
-[![](https://github.com/libp2p/interface-stream-muxer/raw/master/img/badge.png)](https://github.com/libp2p/interface-stream-muxer)
 
 ## Usage
 
-```js
-import { Mplex } from '@libp2p/mplex'
-import { pipe } from 'it-pipe'
+```typescript
+import { Mplex } from 'node-mplex'
 
 const factory = new Mplex()
 
-const muxer = factory.createStreamMuxer(components, {
+const server = factory.createStreamMuxer({
   onStream: stream => { // Receive a duplex stream from the remote
     // ...receive data from the remote and optionally send data back
   },
@@ -53,12 +24,14 @@ const muxer = factory.createStreamMuxer(components, {
   }
 })
 
-pipe(conn, muxer, conn) // conn is duplex connection to another peer
+const client = new MplexStreamMuxer({})
 
-const stream = muxer.newStream() // Create a new duplex stream to the remote
+server.pipe(client).pipe(server) // conn is duplex connection to another peer
 
-// Use the duplex stream to send some data to the remote...
-pipe([1, 2, 3], stream)
+const stream = client.newStream() // Create a new duplex stream to the remote
+
+stream.write('aaaa')
+stream.end()
 ```
 
 ## API
@@ -82,14 +55,15 @@ Create a new *duplex* stream that can be piped together with a connection in ord
 e.g.
 
 ```js
-import { Mplex } from '@libp2p/mplex'
-import { pipe } from 'it-pipe'
+import { Mplex } from 'node-mplex'
+
+const factory = new Mplex()
 
 // Create a duplex muxer
-const muxer = new Mplex()
+const muxer = factory.createStreamMuxer()
 
 // Use the muxer in a pipeline
-pipe(conn, muxer, conn) // conn is duplex connection to another peer
+conn.pipe(muxer).pipe(conn) // conn is duplex connection to another peer
 ```
 
 `options` is an optional `Object` that may have the following properties:
@@ -157,7 +131,10 @@ e.g.
 const stream = muxer.newStream()
 
 // Use this new stream like any other duplex stream:
-pipe([1, 2, 3], stream, consume)
+stream.on('data', (data) => {
+  console.log(data)
+})
+stream.write(Buffer.from('hello'))
 ```
 
 In addition to `sink` and `source` properties, this stream also has the following API, that will **normally *not* be used by stream consumers**.
@@ -195,13 +172,6 @@ Returns an `object` with `close` and `open` times of the stream.
 #### `stream.id`
 
 Returns a `string` with an identifier unique to **this** muxer. Identifiers are not unique across muxers.
-
-## Contribute
-
-The libp2p implementation in JavaScript is a work in progress. As such, there are a few things you can do right now to help out:
-
-- Go through the modules and **check out existing issues**. This is especially useful for modules in active development. Some knowledge of IPFS/libp2p may be required, as well as the infrastructure behind it - for instance, you may need to read up on p2p and more complex operations like muxing to be able to help technically.
-- **Perform code reviews**. More eyes will help a) speed the project along b) ensure quality and c) reduce possible future bugs.
 
 ## License
 

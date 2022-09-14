@@ -1,18 +1,12 @@
-import { abortableSource } from 'abortable-iterator'
-import { pushable } from 'it-pushable'
+import * as streams from 'stream'
 import errCode from 'err-code'
-import { MAX_MSG_SIZE } from './restrict-size.js'
-import { anySignal } from 'any-signal'
-import { InitiatorMessageTypes, ReceiverMessageTypes } from './message-types.js'
+import { MAX_MSG_SIZE } from './restrict-size'
+import { InitiatorMessageTypes, ReceiverMessageTypes } from './message-types'
 import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string'
-import { Uint8ArrayList } from 'uint8arraylist'
-import { logger } from '@libp2p/logger'
-import type { Message } from './message-types.js'
-import type { StreamTimeline } from '@libp2p/interface-connection'
-import type { Source } from 'it-stream-types'
-import type { MplexStream } from './mplex.js'
-
-const log = logger('libp2p:mplex:stream')
+import { Uint8ArrayList } from './thirdparty/uint8arraylist'
+import type { Message } from './message-types'
+import type { Stream } from './types'
+import { dummyLogger, LoggerFactory } from './logger'
 
 const ERR_STREAM_RESET = 'ERR_STREAM_RESET'
 const ERR_STREAM_ABORT = 'ERR_STREAM_ABORT'
@@ -26,10 +20,18 @@ export interface Options {
   onEnd?: (err?: Error) => void
   type?: 'initiator' | 'receiver'
   maxMsgSize?: number
+  loggerFactory?: LoggerFactory
+}
+
+export interface MplexStream extends Stream {
+  sourceReadableLength: () => number
+  sourcePush: (data: Uint8ArrayList) => void
 }
 
 export function createStream (options: Options): MplexStream {
-  const { id, name, send, onEnd, type = 'initiator', maxMsgSize = MAX_MSG_SIZE } = options
+  const { id, name, send, onEnd, type = 'initiator', maxMsgSize = MAX_MSG_SIZE, loggerFactory } = options
+
+  const log = loggerFactory ? loggerFactory('mplex:stream') : dummyLogger()
 
   const abortController = new AbortController()
   const resetController = new AbortController()
@@ -38,14 +40,14 @@ export function createStream (options: Options): MplexStream {
   const externalId = type === 'initiator' ? (`i${id}`) : `r${id}`
   const streamName = `${name == null ? id : name}`
 
+  let readableLength = 0
+
   let sourceEnded = false
   let sinkEnded = false
   let sinkSunk = false
   let endErr: Error | undefined
 
-  const timeline: StreamTimeline = {
-    open: Date.now()
-  }
+  const uint8ArrayList = new Uint8ArrayList()
 
   const onSourceEnd = (err?: Error) => {
     if (sourceEnded) {
@@ -60,9 +62,8 @@ export function createStream (options: Options): MplexStream {
     }
 
     if (sinkEnded) {
-      stream.stat.timeline.close = Date.now()
-
       if (onEnd != null) {
+        stream.destroy(err)
         onEnd(endErr)
       }
     }
@@ -72,7 +73,6 @@ export function createStream (options: Options): MplexStream {
     if (sinkEnded) {
       return
     }
-
     sinkEnded = true
     log.trace('%s stream %s sink end - err: %o', type, streamName, err)
 
@@ -81,19 +81,51 @@ export function createStream (options: Options): MplexStream {
     }
 
     if (sourceEnded) {
-      timeline.close = Date.now()
-
       if (onEnd != null) {
+        stream.destroy(err)
         onEnd(endErr)
       }
     }
   }
 
-  const streamSource = pushable<Uint8ArrayList>({
-    onEnd: onSourceEnd
-  })
+  const onFinal = () => {
+    try {
+      send({ id, type: Types.CLOSE })
+    } catch (err) {
+      log.trace('%s stream %s error sending close', type, name, err)
+    }
 
-  const stream: MplexStream = {
+    onSinkEnd()
+  }
+
+  const stream: MplexStream = new streams.Duplex({
+    autoDestroy: true,
+    final (callback: (error?: (Error | null)) => void): void {
+      onFinal()
+      callback()
+    },
+    read (size: number): void {
+      readableLength = size
+    },
+    write (data: any, encoding: BufferEncoding, callback: (error?: (Error | null)) => void): void {
+      uint8ArrayList.append(data)
+
+      while (uint8ArrayList.length !== 0) {
+        if (uint8ArrayList.length <= maxMsgSize) {
+          send({ id, type: Types.MESSAGE, data: uint8ArrayList.sublist() })
+          uint8ArrayList.consume(uint8ArrayList.length)
+          break
+        }
+
+        send({ id, type: Types.MESSAGE, data: uint8ArrayList.sublist(0, maxMsgSize) })
+        uint8ArrayList.consume(maxMsgSize)
+      }
+
+      callback()
+    }
+  }) as MplexStream
+
+  Object.assign(stream, {
     // Close for both Reading and Writing
     close: () => {
       log.trace('%s stream %s close', type, streamName)
@@ -110,7 +142,9 @@ export function createStream (options: Options): MplexStream {
         return
       }
 
-      streamSource.end()
+      stream.push(null)
+
+      onSourceEnd()
     },
 
     // Close for writing
@@ -136,7 +170,7 @@ export function createStream (options: Options): MplexStream {
     abort: (err: Error) => {
       log.trace('%s stream %s abort', type, streamName, err)
       // End the source with the passed error
-      streamSource.end(err)
+      onSourceEnd()
       abortController.abort()
       onSinkEnd(err)
     },
@@ -145,110 +179,74 @@ export function createStream (options: Options): MplexStream {
     reset: () => {
       const err = errCode(new Error('stream reset'), ERR_STREAM_RESET)
       resetController.abort()
-      streamSource.end(err)
+      onSourceEnd(err)
       onSinkEnd(err)
     },
 
-    sink: async (source: Source<Uint8ArrayList | Uint8Array>) => {
-      if (sinkSunk) {
-        throw errCode(new Error('sink already called on stream'), ERR_DOUBLE_SINK)
-      }
-
-      sinkSunk = true
-
-      if (sinkEnded) {
-        throw errCode(new Error('stream closed for writing'), ERR_SINK_ENDED)
-      }
-
-      source = abortableSource(source, anySignal([
-        abortController.signal,
-        resetController.signal,
-        closeController.signal
-      ]))
-
-      try {
-        if (type === 'initiator') { // If initiator, open a new stream
-          send({ id, type: InitiatorMessageTypes.NEW_STREAM, data: new Uint8ArrayList(uint8ArrayFromString(streamName)) })
-        }
-
-        const uint8ArrayList = new Uint8ArrayList()
-
-        for await (const data of source) {
-          uint8ArrayList.append(data)
-
-          while (uint8ArrayList.length !== 0) {
-            if (uint8ArrayList.length <= maxMsgSize) {
-              send({ id, type: Types.MESSAGE, data: uint8ArrayList.sublist() })
-              uint8ArrayList.consume(uint8ArrayList.length)
-              break
-            }
-
-            send({ id, type: Types.MESSAGE, data: uint8ArrayList.sublist(0, maxMsgSize) })
-            uint8ArrayList.consume(maxMsgSize)
-          }
-        }
-      } catch (err: any) {
-        if (err.type === 'aborted' && err.message === 'The operation was aborted') {
-          if (closeController.signal.aborted) {
-            return
-          }
-
-          if (resetController.signal.aborted) {
-            err.message = 'stream reset'
-            err.code = ERR_STREAM_RESET
-          }
-
-          if (abortController.signal.aborted) {
-            err.message = 'stream aborted'
-            err.code = ERR_STREAM_ABORT
-          }
-        }
-
-        // Send no more data if this stream was remotely reset
-        if (err.code === ERR_STREAM_RESET) {
-          log.trace('%s stream %s reset', type, name)
-        } else {
-          log.trace('%s stream %s error', type, name, err)
-          try {
-            send({ id, type: Types.RESET })
-          } catch (err) {
-            log.trace('%s stream %s error sending reset', type, name, err)
-          }
-        }
-
-        streamSource.end(err)
-        onSinkEnd(err)
-        return
-      }
-
-      try {
-        send({ id, type: Types.CLOSE })
-      } catch (err) {
-        log.trace('%s stream %s error sending close', type, name, err)
-      }
-
-      onSinkEnd()
-    },
-
-    source: streamSource,
-
     sourcePush: (data: Uint8ArrayList) => {
-      streamSource.push(data)
+      [...data].forEach((chunk) => {
+        stream.push(chunk)
+      })
     },
 
     sourceReadableLength () {
-      return streamSource.readableLength
-    },
-
-    stat: {
-      direction: type === 'initiator' ? 'outbound' : 'inbound',
-      timeline
+      return readableLength
     },
 
     metadata: {},
 
     id: externalId
+  } as Partial<MplexStream>)
+
+  const start = () => {
+    if (sinkSunk) {
+      throw errCode(new Error('sink already called on stream'), ERR_DOUBLE_SINK)
+    }
+
+    sinkSunk = true
+
+    if (sinkEnded) {
+      throw errCode(new Error('stream closed for writing'), ERR_SINK_ENDED)
+    }
+
+    try {
+      if (type === 'initiator') { // If initiator, open a new stream
+        send({ id, type: InitiatorMessageTypes.NEW_STREAM, data: new Uint8ArrayList(uint8ArrayFromString(streamName)) })
+      }
+    } catch (err: any) {
+      if (err.type === 'aborted' && err.message === 'The operation was aborted') {
+        if (closeController.signal.aborted) {
+          return
+        }
+
+        if (resetController.signal.aborted) {
+          err.message = 'stream reset'
+          err.code = ERR_STREAM_RESET
+        }
+
+        if (abortController.signal.aborted) {
+          err.message = 'stream aborted'
+          err.code = ERR_STREAM_ABORT
+        }
+      }
+
+      // Send no more data if this stream was remotely reset
+      if (err.code === ERR_STREAM_RESET) {
+        log.trace('%s stream %s reset', type, name)
+      } else {
+        log.trace('%s stream %s error', type, name, err)
+        try {
+          send({ id, type: Types.RESET })
+        } catch (err) {
+          log.trace('%s stream %s error sending reset', type, name, err)
+        }
+      }
+
+      onSourceEnd(err)
+      onSinkEnd(err)
+    }
   }
+  start()
 
   return stream
 }
