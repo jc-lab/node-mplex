@@ -20,7 +20,7 @@ export interface Options {
   onEnd?: (err?: Error) => void
   type?: 'initiator' | 'receiver'
   maxMsgSize?: number
-  loggerFactory: LoggerFactory
+  loggerFactory?: LoggerFactory
 }
 
 export interface MplexStream extends Stream {
