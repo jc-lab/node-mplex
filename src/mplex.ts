@@ -11,7 +11,7 @@ import { dummyLogger } from './logger'
 import type { Stream, StreamMuxer, StreamMuxerInit } from './types'
 
 export interface MplexInit {
-  loggerFactory: LoggerFactory
+  loggerFactory?: LoggerFactory
 
   /**
    * The maximum size of message that can be sent in one go in bytes.

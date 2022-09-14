@@ -1,5 +1,5 @@
 {
-  "name": "mplex",
+  "name": "node-mplex",
   "version": "5.2.2",
   "description": "JavaScript implementation of https://github.com/libp2p/mplex",
   "license": "Apache-2.0 OR MIT",
@@ -29,7 +29,7 @@
     "!**/*.tsbuildinfo"
   ],
   "scripts": {
-    "lint": "eslint .",
+    "lint": "eslint src/**/*",
     "build": "tsc --project tsconfig.dist.json --outDir dist/cjs"
   },
   "dependencies": {
