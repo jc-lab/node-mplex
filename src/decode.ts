@@ -1,7 +1,6 @@
-import { MessageTypeNames, MessageTypes } from './message-types.js'
-import { Uint8ArrayList } from 'uint8arraylist'
-import type { Source } from 'it-stream-types'
-import type { Message } from './message-types.js'
+import { MessageTypeNames, MessageTypes } from './message-types'
+import { Uint8ArrayList } from './thirdparty/uint8arraylist'
+import type { Message } from './message-types'
 
 interface MessageHeader {
   id: number
@@ -10,7 +9,7 @@ interface MessageHeader {
   length: number
 }
 
-class Decoder {
+export class Decoder {
   private readonly _buffer: Uint8ArrayList
   private _headerInfo: MessageHeader | null
 
@@ -76,7 +75,6 @@ class Decoder {
 
     const type = h & 7
 
-    // @ts-expect-error h is a number not a CODE
     if (MessageTypeNames[type] == null) {
       throw new Error(`Invalid type received: ${type}`)
     }
@@ -113,20 +111,5 @@ function readVarInt (buf: Uint8ArrayList, offset: number = 0) {
   return {
     value: res,
     offset
-  }
-}
-
-/**
- * Decode a chunk and yield an _array_ of decoded messages
- */
-export async function * decode (source: Source<Uint8Array>) {
-  const decoder = new Decoder()
-
-  for await (const chunk of source) {
-    const msgs = decoder.write(chunk)
-
-    if (msgs.length > 0) {
-      yield msgs
-    }
   }
 }

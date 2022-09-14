@@ -1,11 +1,10 @@
-import type { Source } from 'it-stream-types'
 import varint from 'varint'
-import { allocUnsafe } from './alloc-unsafe.js'
-import { Message, MessageTypes } from './message-types.js'
+import { allocUnsafe } from './alloc-unsafe'
+import { Message, MessageTypes } from './message-types'
 
 const POOL_SIZE = 10 * 1024
 
-class Encoder {
+export class Encoder {
   private _pool: Uint8Array
   private _poolOffset: number
 
@@ -51,22 +50,5 @@ class Encoder {
     return [
       header
     ]
-  }
-}
-
-const encoder = new Encoder()
-
-/**
- * Encode and yield one or more messages
- */
-export async function * encode (source: Source<Message | Message[]>) {
-  for await (const msg of source) {
-    if (Array.isArray(msg)) {
-      for (const m of msg) {
-        yield * encoder.write(m)
-      }
-    } else {
-      yield * encoder.write(msg)
-    }
   }
 }
