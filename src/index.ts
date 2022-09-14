@@ -7,6 +7,7 @@ import {
 } from './mplex'
 
 export * from './types'
+export * from './logger'
 export * from './mplex'
 
 export class Mplex {
